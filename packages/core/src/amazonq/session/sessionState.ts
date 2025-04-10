@@ -66,7 +66,7 @@ export abstract class CodeGenBase {
         action: SessionStateAction
     ): void
 
-    async generateCode({
+    public async generateCode({
         messenger,
         fs,
         codeGenerationId,

@@ -5,7 +5,7 @@
 
 import { docScheme, featureName, Mode } from '../constants'
 import { DeletedFileInfo, Interaction, NewFileInfo, SessionState, SessionStateConfig } from '../types'
-import { DocPrepareCodeGenState } from './sessionState'
+import { DocPreparePocCodeGenState } from './sessionStatePoc'
 import { telemetry } from '../../shared/telemetry/telemetry'
 import { AuthUtil } from '../../codewhisperer/util/authUtil'
 import { SessionConfig } from '../../amazonq/commons/session/sessionConfigFactory'
@@ -94,7 +94,7 @@ export class Session {
             span.record({ amazonqConversationId: this._conversationId, credentialStartUrl: AuthUtil.instance.startUrl })
         })
 
-        this._state = new DocPrepareCodeGenState(
+        this._state = new DocPreparePocCodeGenState(
             {
                 ...this.getSessionStateConfig(),
                 conversationId: this.conversationId,
