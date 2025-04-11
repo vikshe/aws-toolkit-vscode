@@ -778,6 +778,7 @@ const devSettings = {
     autofillStartUrl: String,
     webAuth: Boolean,
     notificationsPollInterval: Number,
+    qcliProjectPath: String,
 }
 type ResolvedDevSettings = FromDescriptor<typeof devSettings>
 type AwsDevSetting = keyof ResolvedDevSettings

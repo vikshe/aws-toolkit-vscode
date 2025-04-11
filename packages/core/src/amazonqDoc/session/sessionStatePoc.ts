@@ -53,6 +53,7 @@ import { ToolkitError } from '../../shared/errors'
 // eslint-disable-next-line no-restricted-imports
 import { ChildProcessWithoutNullStreams, spawn } from 'child_process'
 import { AmazonqCreateUpload, Span } from '../../shared/telemetry'
+import { DevSettings } from '../../shared'
 
 type CliProcessCodeGenerationResult = {
     codeGenerationRemainingIterationCount: number
@@ -67,6 +68,8 @@ type CliProcessCodeGenerationResult = {
 
 export class DocCodeGenPocState extends BaseCodeGenState {
     private qChatProcess: ChildProcessWithoutNullStreams | undefined
+    private qChatProcessIsClosed: boolean = true
+
     private pollCountInner = 360
     private requestDelayInner = 5000
 
@@ -272,19 +275,30 @@ export class DocCodeGenPocState extends BaseCodeGenState {
         //     action.folderPath ? { documentation: { type: 'README', scope: action.folderPath } } : undefined
         // )
 
+        // folder path is present
+        // how to get operation! mode!!!
+
         await this.cleanCliWorkFolder()
         await this.killCliProcess()
 
         const workspacePath = this.config.workspaceRoots[0]
-        this.qChatProcess = spawn(
-            'cd /Volumes/workplace/amazon-q/blueprints/github/q-cli/wade/amazon-q-developer-cli && cargo run --bin q_cli',
-            [
-                '-- chat',
-                '--no-interactive',
-                '--accept-all',
-                `generate readme file for project workspace ${workspacePath}. The output should be generated in q_tmp folder under the workspace folder`,
-            ]
-        )
+        // const cmd = `bash && cd /Volumes/workplace/amazon-q/blueprints/github/q-cli/wade/amazon-q-developer-cli && cargo`
+        // run --bin q_cli -- chat --no-interactive --accept-all "generate readme file for project workspace located at '${workspacePath}'. The output should be generated in 'q_tmp' folder under the workspace folder"`
+        // const text = `generate readme file for project workspace located at '${workspacePath}'. The output should be generated in 'q_tmp' folder under the workspace folder`
+        // const args = ['run', '--bin', 'q_cli', '--', 'chat', '--no-interactive', '--accept-all', text]
+        let text = `"Generate a knowledge graph for project workspace located at '${workspacePath}' then use the knowledge graph to generate a readme file. The output should be generated in 'q_tmp' folder under the workspace folder"`
+        if (Mode.SYNC == action.mode) {
+            text = `"Generate a knowledge graph for project workspace located at '${workspacePath}' then update readme file for project to reflect the latest code changes. The output should be generated in 'q_tmp' folder under the workspace folder"`
+        } else if (Mode.EDIT == action.mode) {
+            text = `"Generate a knowledge graph for project workspace located at '${workspacePath}' then update readme file for project according to user input '${action.msg}'. The output should be generated in 'q_tmp' folder under the workspace folder"`
+        }
+
+        const args = ['run', '--bin', 'q_cli', '--', 'chat', '--no-interactive', '--accept-all', text]
+        const defaultWorkDir = '/Volumes/workplace/amazon-q/blueprints/github/q-cli/wade/amazon-q-developer-cli'
+        const workDir = DevSettings.instance.get('qcliProjectPath', defaultWorkDir)
+
+        this.qChatProcessIsClosed = false
+        this.qChatProcess = spawn('cargo', args, { cwd: workDir })
 
         this.qChatProcess.stdout.on('data', (data) => {
             getLogger().info(`stdout: ${data}`)
@@ -296,24 +310,69 @@ export class DocCodeGenPocState extends BaseCodeGenState {
 
         this.qChatProcess.on('close', (code) => {
             getLogger().info(`child process exited with code ${code}`)
+            this.qChatProcessIsClosed = true
         })
 
         this.qChatProcess.on('error', (err) => {
             getLogger().error(err)
         })
+
+        this.qChatProcess.stdin.write('\n') // Simulate pressing Enter
+        this.qChatProcess.stdin.end()
     }
 
     protected override createNextState(config: SessionStateConfig, params: CreateNextStateParams): SessionState {
         return super.createNextState(config, params, DocPreparePocCodeGenState)
     }
 
+    protected getQtmpFolder() {
+        const ws = this.config.workspaceRoots[0]
+        return `${ws}/q_tmp/`
+    }
+
+    protected checkIfFileExists(filePath: string): boolean {
+        try {
+            return fs.existsSync(filePath)
+        } catch (error) {
+            return false
+        }
+    }
+
+    protected readFileContentSync(filePath: string): string {
+        try {
+            const fileContent: string = fs.readFileSync(filePath, 'utf-8')
+            return fileContent
+        } catch (error: any) {
+            return ''
+        }
+    }
+
     protected async getCliProcessCodeGenerationResult(): Promise<CliProcessCodeGenerationResult> {
+        const qTmp = this.getQtmpFolder()
+        let status = CodeGenerationStatus.COMPLETE
+        const newFileContents: NewFileZipContents[] = []
+
+        if (this.qChatProcessIsClosed) {
+            if (!this.checkIfFileExists(`${qTmp}/README.md`)) {
+                status = CodeGenerationStatus.FAILED
+            } else {
+                status = CodeGenerationStatus.COMPLETE
+                const readmeContent = this.readFileContentSync(`${qTmp}/README.md`)
+                newFileContents.push({
+                    zipFilePath: 'README.md',
+                    fileContent: readmeContent,
+                })
+            }
+        } else {
+            status = CodeGenerationStatus.IN_PROGRESS
+        }
+
         return {
             codeGenerationRemainingIterationCount: 1,
             codeGenerationTotalIterationCount: 1,
-            codeGenerationStatus: CodeGenerationStatus.COMPLETE,
+            codeGenerationStatus: status,
             data: {
-                newFileContents: [],
+                newFileContents: newFileContents,
                 deletedFiles: [],
                 references: [],
             },
@@ -334,10 +393,11 @@ export class DocCodeGenPocState extends BaseCodeGenState {
 
     protected async cleanCliWorkFolder(): Promise<void> {
         const workspacePath = this.config.workspaceRoots[0]
+        const tmpDir = `${workspacePath}/q_tmp/`
 
         if (workspacePath) {
             try {
-                await fs.promises.rm(workspacePath, { recursive: true, force: true })
+                await fs.promises.rm(tmpDir, { recursive: true, force: true })
                 getLogger().info('CLI work folder cleaned successfully')
             } catch (e: any) {
                 getLogger().error('Cannot clean directory')
